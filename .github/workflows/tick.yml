@@ -1,0 +1,57 @@
+name: tick
+
+# Only the cron (and manual dispatch) can trigger a tick. There is no `push`
+# trigger, so a bot commit cannot possibly retrigger this workflow. The
+# [skip ci] in the commit message is belt-and-suspenders for any future
+# push-triggered workflows added to the repo.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: life-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+
+      - name: install project
+        run: uv sync
+
+      - name: compute next generation
+        id: tick
+        run: |
+          set -euo pipefail
+          MSG=$(uv run tick)
+          {
+            echo "msg<<LIFE_EOF"
+            echo "$MSG"
+            echo "LIFE_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: commit and push
+        env:
+          MSG: ${{ steps.tick.outputs.msg }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "no board changes (stable pattern); skipping commit"
+            exit 0
+          fi
+          printf '%s\n\n[skip ci]\n' "${MSG:-tick}" | git commit -F -
+          git push origin "HEAD:${GITHUB_REF_NAME}"
